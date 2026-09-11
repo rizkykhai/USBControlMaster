@@ -116,7 +116,7 @@ def http_json(url, method="GET", data=None, token=None):
         raise
 
 
-def set_usb_storage(enabled):
+def set_usb_storage(enabled, state=None):
     # USB Mass Storage: 3 = enabled, 4 = disabled.
     value = 3 if bool(enabled) else 4
     reg_path = r"HKLM\SYSTEM\CurrentControlSet\Services\USBSTOR"
@@ -149,6 +149,69 @@ def set_usb_storage(enabled):
         )
 
     log(f"USBSTOR applied and verified: Start={expected}")
+
+    # Also enable/disable present USB mass storage devices via pnputil,
+    # so already-connected USBs are affected immediately (not just new ones).
+    state = state if isinstance(state, dict) else {}
+    disabled_ids = set(state.get("usb_disabled_instance_ids", []))
+    ps = r"""
+$devices = @(Get-PnpDevice | Where-Object { $_.InstanceId -like "*USBSTOR*" })
+foreach ($d in $devices) {
+  [PSCustomObject]@{Status=[string]$d.Status; FriendlyName=[string]$d.FriendlyName; InstanceId=[string]$d.InstanceId} | ConvertTo-Json -Compress
+}
+"""
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy",
+         "Bypass", "-Command", ps],
+        capture_output=True, text=True, timeout=30
+    )
+    if result.returncode != 0:
+        log(f"USB storage enumeration error: {(result.stderr or result.stdout).strip()}")
+        return
+
+    devices = []
+    for line in (result.stdout or "").splitlines():
+        try:
+            obj = json.loads(line.strip())
+            if obj.get("InstanceId"):
+                devices.append(obj)
+        except Exception:
+            pass
+
+    if enabled:
+        # Re-enable previously disabled USB storage devices.
+        targets = set(disabled_ids)
+        targets.update(d["InstanceId"] for d in devices
+                       if str(d.get("Status", "")).lower() == "disabled")
+        for iid in sorted(targets):
+            r = subprocess.run(
+                ["pnputil.exe", "/enable-device", iid],
+                capture_output=True, text=True, timeout=30
+            )
+            if r.returncode != 0:
+                log(f"Failed to enable USB storage device {iid}: {(r.stderr or r.stdout).strip()}")
+        state["usb_disabled_instance_ids"] = []
+        log(f"USB storage ENABLED: re-enabled {len(targets)} device instance(s)")
+    else:
+        present = [d for d in devices
+                   if str(d.get("Status", "")).lower() == "ok"]
+        new_ids = []
+        failures = []
+        for d in present:
+            iid = d["InstanceId"]
+            r = subprocess.run(
+                ["pnputil.exe", "/disable-device", iid],
+                capture_output=True, text=True, timeout=30
+            )
+            if r.returncode == 0:
+                new_ids.append(iid)
+            else:
+                failures.append((iid, (r.stderr or r.stdout).strip()))
+        if failures and not new_ids:
+            detail = "; ".join(f"{iid}: {msg}" for iid, msg in failures)
+            raise RuntimeError(f"USB storage disable failed: {detail}")
+        state["usb_disabled_instance_ids"] = new_ids
+        log(f"USB storage DISABLED: disabled {len(new_ids)} present device instance(s) via pnputil")
 
 
 def set_mtp(enabled, state=None):
@@ -324,7 +387,7 @@ def run_agent():
 
     # Apply cached policies immediately on service start.
     try:
-        set_usb_storage(last_policy)
+        set_usb_storage(last_policy, state)
         log(f"Startup USB policy applied: {'ENABLED' if last_policy else 'DISABLED'}")
     except Exception as e:
         log(f"Initial USB policy error: {e}")
@@ -343,7 +406,7 @@ def run_agent():
             enabled = bool(data.get("usb_enabled", last_policy))
             mtp_enabled = bool(data.get("mtp_enabled", last_mtp_policy))
 
-            set_usb_storage(enabled)
+            set_usb_storage(enabled, state)
             set_mtp(mtp_enabled, state)
 
             if enabled != last_policy:
