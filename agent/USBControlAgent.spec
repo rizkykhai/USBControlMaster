@@ -1,8 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
+import os
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
 a = Analysis(
-    ['C:/Users/WAWA GAMES PC/Downloads/USBControlAgent_FINAL_V8_FIXED/USBControlAgent_FINAL_V8/USBControlAgent.py'],
+    [os.path.join(script_dir, 'USBControlAgent.py')],
     pathex=[],
     binaries=[],
     datas=[],
