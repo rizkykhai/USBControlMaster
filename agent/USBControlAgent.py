@@ -385,7 +385,17 @@ def run_agent():
     last_policy = bool(state.get("usb_enabled", True))
     last_mtp_policy = bool(state.get("mtp_enabled", True))
 
-    # Apply cached policies immediately on service start.
+    # Try to fetch the latest policy from server FIRST before applying cached.
+    # This avoids re-applying a stale cached policy after a long outage.
+    try:
+        data = http_json(master_url + "/api/agent/policy", token=token)
+        last_policy = bool(data.get("usb_enabled", last_policy))
+        last_mtp_policy = bool(data.get("mtp_enabled", last_mtp_policy))
+        log(f"Startup: fetched latest policy from server — USB={'ENABLED' if last_policy else 'DISABLED'}")
+    except Exception as e:
+        log(f"Startup: cannot reach server ({e}), applying cached policy.")
+
+    # Apply current policy on service start.
     try:
         set_usb_storage(last_policy, state)
         log(f"Startup USB policy applied: {'ENABLED' if last_policy else 'DISABLED'}")
@@ -400,6 +410,8 @@ def run_agent():
 
     log(f"Agent started. Device={device_id}; USB={'ENABLED' if last_policy else 'DISABLED'}")
 
+    consecutive_errors = 0
+
     while True:
         try:
             data = http_json(master_url + "/api/agent/policy", token=token)
@@ -411,21 +423,23 @@ def run_agent():
 
             if enabled != last_policy:
                 log(f"Master USB policy changed: {'ENABLED' if enabled else 'DISABLED'}")
-            else:
-                log(f"Master USB policy confirmed: {'ENABLED' if enabled else 'DISABLED'}")
             if mtp_enabled != last_mtp_policy:
                 log(f"Master MTP policy changed: {'ENABLED' if mtp_enabled else 'DISABLED'}")
-            else:
-                log(f"Master MTP policy confirmed: {'ENABLED' if mtp_enabled else 'DISABLED'}")
 
             last_policy = enabled
             last_mtp_policy = mtp_enabled
             state["usb_enabled"] = enabled
             state["mtp_enabled"] = mtp_enabled
+            state["policy_applied_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
             save_state(state)
+            consecutive_errors = 0
 
         except Exception as e:
-            log(f"Master unavailable/error: {e}. Keeping last policies.")
+            consecutive_errors += 1
+            if consecutive_errors == 1:
+                log(f"WARNING: Gagal hubungi server ({e}). Policy terakhir tetap berlaku. Akan coba lagi setiap {POLL_SECONDS}s.")
+            elif consecutive_errors % 6 == 0:  # log every ~1 minute of failures
+                log(f"WARNING: Masih gagal hubungi server setelah {consecutive_errors * POLL_SECONDS}s. Error: {e}")
 
         time.sleep(POLL_SECONDS)
 

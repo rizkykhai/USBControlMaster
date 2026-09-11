@@ -30,6 +30,7 @@
             <th>Nama Tampilan</th>
             <th>Computer</th>
             <th>Device ID</th>
+            <th>Status Agent</th>
             <th>USB Mass Storage</th>
             <th>MTP / WPD</th>
             <th>Last Seen</th>
@@ -42,6 +43,7 @@
             <td><strong>{{ d.display_name or d.device_name }}</strong></td>
             <td>{{ d.device_name }}</td>
             <td><code>{{ d.device_id }}</code></td>
+            <td><span class="badge {{ 'on' if d.online else 'off' }}">{{ 'ONLINE' if d.online else 'OFFLINE' }}</span></td>
             <td><span class="badge {{ 'on' if d.usb_enabled else 'off' }}">{{ 'ENABLED' if d.usb_enabled else 'DISABLED' }}</span></td>
             <td><span class="badge {{ 'on' if d.mtp_enabled else 'off' }}">{{ 'ENABLED' if d.mtp_enabled else 'DISABLED' }}</span></td>
             <td>{{ d.last_seen or '-' }}</td>
@@ -52,7 +54,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="7" class="empty">Belum ada device.</td></tr>
+          <tr><td colspan="8" class="empty">Belum ada device.</td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -83,17 +85,19 @@ async function loadDevices() {
     if (!res.ok) throw new Error(devices.detail || 'Gagal mengambil device');
     const tbody = document.getElementById('devices');
     if (!devices.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="empty">Belum ada device.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="empty">Belum ada device.</td></tr>';
       return;
     }
     tbody.innerHTML = devices.map(d => {
       const shown = d.display_name || d.device_name || d.device_id;
       const usb = !!d.usb_enabled;
       const mtp = d.mtp_enabled !== false;
+      const online = d.online === true;
       return '<tr>' +
         '<td><strong>' + escapeHtml(shown) + '</strong></td>' +
         '<td>' + escapeHtml(d.device_name) + '</td>' +
         '<td><code>' + escapeHtml(d.device_id) + '</code></td>' +
+        '<td><span class="badge ' + (online ? 'on' : 'off') + '">' + (online ? 'ONLINE' : 'OFFLINE') + '</span></td>' +
         '<td><span class="badge ' + (usb ? 'on' : 'off') + '">' + (usb ? 'ENABLED' : 'DISABLED') + '</span></td>' +
         '<td><span class="badge ' + (mtp ? 'on' : 'off') + '">' + (mtp ? 'ENABLED' : 'DISABLED') + '</span></td>' +
         '<td>' + escapeHtml(d.last_seen || '-') + '</td>' +

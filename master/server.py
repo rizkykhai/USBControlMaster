@@ -28,6 +28,18 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def is_online(last_seen_str, max_age_seconds=120):
+    """Return True if last_seen is within max_age_seconds."""
+    if not last_seen_str:
+        return False
+    try:
+        last = datetime.fromisoformat(last_seen_str)
+        delta = datetime.now(timezone.utc) - last
+        return delta.total_seconds() < max_age_seconds
+    except Exception:
+        return False
+
+
 def ensure_column(conn, table, column, definition):
     cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in cols:
@@ -116,10 +128,15 @@ def dashboard(request: Request):
         FROM devices ORDER BY id DESC
     """).fetchall()
     conn.close()
+    device_list = []
+    for d in devices:
+        item = dict(d)
+        item["online"] = is_online(d["last_seen"])
+        device_list.append(item)
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
-        context={"devices": devices},
+        context={"devices": device_list},
     )
 
 
@@ -137,8 +154,26 @@ def get_devices():
         d = dict(r)
         d["usb_enabled"] = bool(d.get("usb_enabled"))
         d["mtp_enabled"] = bool(d.get("mtp_enabled"))
+        d["online"] = is_online(d.get("last_seen"))
         result.append(d)
     return result
+
+
+@app.get("/api/devices/{device_id}/status")
+def get_device_status(device_id: str):
+    """Return detailed status for a single device (for diagnostics)."""
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM devices WHERE device_id=?", (device_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "Device tidak ditemukan")
+    d = dict(row)
+    d["usb_enabled"] = bool(d.get("usb_enabled"))
+    d["mtp_enabled"] = bool(d.get("mtp_enabled"))
+    d["online"] = is_online(d.get("last_seen"))
+    return d
 
 
 @app.post("/api/enrollment-keys")
