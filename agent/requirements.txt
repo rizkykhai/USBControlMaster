@@ -1,2 +1,2 @@
-pywin32==311
+pywin32>=306
 pyinstaller>=6.0
