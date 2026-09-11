@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -11,6 +12,11 @@ import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+try:
+    import certifi
+except ImportError:
+    certifi = None  # fallback: use default SSL context
 
 # Required by pywin32 services, especially when frozen by PyInstaller.
 import win32timezone  # noqa: F401
@@ -89,9 +95,25 @@ def http_json(url, method="GET", data=None, token=None):
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        raw = resp.read().decode("utf-8")
-        return json.loads(raw) if raw else {}
+
+    ctx = None
+    if url.startswith("https://") and certifi is not None:
+        ctx = ssl.create_default_context(cafile=certifi.where())
+
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.URLError as e:
+        if "certificate verify failed" in str(e):
+            log(f"SSL ERROR: {e}")
+            raise RuntimeError(
+                "Sertifikat SSL server tidak dapat diverifikasi. "
+                "Coba: 1) Sync jam/date PC, 2) Update Windows, "
+                "3) Update Python & certifi (pip install -U certifi). "
+                f"Detail: {e}"
+            )
+        raise
 
 
 def set_usb_storage(enabled):
