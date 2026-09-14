@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Login - USB Control Master</title>
+  <link rel="stylesheet" href="/static/style.css?v=4">
+</head>
+<body>
+<div class="wrap">
+  <div class="login-box">
+    <h1>USB Control Master</h1>
+    <p class="muted">Masuk untuk mengelola device</p>
+    {% if error %}
+    <div class="alert">{{ error }}</div>
+    {% endif %}
+    <form method="post" action="/login">
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" required autofocus autocomplete="username" placeholder="admin@usbcontrol.local">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="********">
+      <button type="submit" class="full">Login</button>
+    </form>
+  </div>
+</div>
+</body>
+</html>

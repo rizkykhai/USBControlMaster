@@ -25,4 +25,16 @@ code { background:#eef2f6; padding:3px 6px; border-radius:5px; }
 .danger { background:#f5d8d8; }
 .success { background:#dcefdc; }
 .empty { text-align:center; color:#75869a; padding:24px; }
+.login-box { max-width:380px; margin:60px auto; background:white; border:1px solid #d8dee8; border-radius:14px; padding:32px; }
+.login-box h1 { margin:0 0 6px; font-size:24px; }
+.login-box .muted { margin:0 0 20px; color:#58708f; }
+.login-box label { display:block; font-weight:600; margin:14px 0 6px; color:#33415c; }
+.login-box input { width:100%; padding:11px 12px; border:1px solid #c9d3e0; border-radius:8px; font-size:15px; }
+.login-box button.full { width:100%; margin-top:20px; background:#2563eb; color:white; font-size:15px; padding:12px; }
+.login-box button.full:hover { background:#1d4ed8; }
+.alert { background:#fbe0e0; color:#9b1c1c; border-radius:8px; padding:10px 12px; margin-bottom:6px; font-size:14px; }
+@media (max-width:800px) { .login-box { margin:24px 16px; } }
+
 @media (max-width:800px) { header { padding:16px; } .keybox,.card { margin-left:16px; margin-right:16px; } header { gap:12px; } }
+#logout-form { position:fixed; top:16px; right:16px; }
+.logout-btn { background:#f0f0f0; }

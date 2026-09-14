@@ -1,10 +1,13 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import hashlib
+import hmac
+import os
 import secrets
 import sqlite3
 
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Form, Request, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -16,6 +19,10 @@ DB_PATH = BASE_DIR / "master.db"
 app = FastAPI(title="USB Control Master V4 - USB + MTP/WPD")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+# --- Dashboard auth (email + password, session cookie 30 menit) ---
+SESSION_COOKIE = "usb_session"
+SESSION_TTL_SECONDS = 30 * 60
 
 
 def db():
@@ -46,6 +53,65 @@ def ensure_column(conn, table, column, definition):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
+def hash_password(password: str) -> str:
+    """PBKDF2-HMAC-SHA256, format: salt_hex$hash_hex (kompatibel hashlib)."""
+    salt = secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200_000)
+    return f"{salt.hex()}${dk.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        salt_hex, hash_hex = stored.split("$", 1)
+        dk = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), 200_000
+        )
+        return hmac.compare_digest(dk.hex(), hash_hex)
+    except Exception:
+        return False
+
+
+def create_session(conn, email: str) -> str:
+    token = secrets.token_urlsafe(32)
+    expires = datetime.now(timezone.utc) + timedelta(seconds=SESSION_TTL_SECONDS)
+    conn.execute(
+        "INSERT INTO sessions(token, email, expires_at, created_at) VALUES (?, ?, ?, ?)",
+        (token, email, expires.isoformat(), now()),
+    )
+    return token
+
+
+def get_session(conn, token: str):
+    """Return session row jika token valid & belum kedaluwarsa, selain itu None."""
+    if not token:
+        return None
+    row = conn.execute(
+        "SELECT token, email, expires_at FROM sessions WHERE token=?", (token,)
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        expires = datetime.fromisoformat(row["expires_at"])
+    except Exception:
+        return None
+    if datetime.now(timezone.utc) >= expires:
+        conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+        conn.commit()
+        return None
+    return row
+
+
+def current_user(request: Request):
+    """Return email user jika cookie session valid, selain itu None."""
+    token = request.cookies.get(SESSION_COOKIE, "")
+    conn = db()
+    try:
+        row = get_session(conn, token)
+        return row["email"] if row else None
+    finally:
+        conn.close()
+
+
 def init_db():
     conn = db()
     conn.execute("""
@@ -70,6 +136,32 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            email TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # Akun admin awal: hanya dibuat jika tabel users masih kosong.
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@usbcontrol.local")
+    admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
+    count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+    if count == 0:
+        conn.execute(
+            "INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)",
+            (admin_email.lower().strip(), hash_password(admin_password), now()),
+        )
 
     # Safe migration for the old master.db: add only missing fields.
     ensure_column(conn, "devices", "display_name", "TEXT")
@@ -119,8 +211,62 @@ def health():
     return {"status": "ok", "database": "master.db"}
 
 
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request):
+    if current_user(request):
+        return RedirectResponse("/", status_code=303)
+    return templates.TemplateResponse(request=request, name="login.html", context={})
+
+
+@app.post("/login")
+def login(request: Request, email: str = Form(...), password: str = Form(...)):
+    conn = db()
+    try:
+        row = conn.execute(
+            "SELECT email, password_hash FROM users WHERE email=?",
+            (email.strip().lower(),),
+        ).fetchone()
+        if not row or not verify_password(password, row["password_hash"]):
+            return templates.TemplateResponse(
+                request=request,
+                name="login.html",
+                context={"error": "Email atau password salah."},
+                status_code=401,
+            )
+        token = create_session(conn, row["email"])
+        conn.commit()
+    finally:
+        conn.close()
+    response = RedirectResponse("/", status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/logout")
+def logout(request: Request):
+    token = request.cookies.get(SESSION_COOKIE, "")
+    if token:
+        conn = db()
+        try:
+            conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+            conn.commit()
+        finally:
+            conn.close()
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(SESSION_COOKIE)
+    return response
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
+    if not current_user(request):
+        return RedirectResponse("/login", status_code=303)
     conn = db()
     devices = conn.execute("""
         SELECT id, device_id, device_name, display_name, username,
@@ -141,7 +287,9 @@ def dashboard(request: Request):
 
 
 @app.get("/api/devices")
-def get_devices():
+def get_devices(request: Request):
+    if not current_user(request):
+        raise HTTPException(401, "Unauthorized")
     conn = db()
     rows = conn.execute("""
         SELECT id, device_id, device_name, display_name, username,
@@ -177,7 +325,9 @@ def get_device_status(device_id: str):
 
 
 @app.post("/api/enrollment-keys")
-def create_key():
+def create_key(request: Request):
+    if not current_user(request):
+        raise HTTPException(401, "Unauthorized")
     conn = db()
     for _ in range(10):
         key = "-".join(secrets.token_hex(2).upper() for _ in range(4))
@@ -278,7 +428,9 @@ def agent_policy(request: Request):
 
 
 @app.post("/api/devices/{device_id}/usb")
-def set_usb(device_id: str, command: USBCommand):
+def set_usb(request: Request, device_id: str, command: USBCommand):
+    if not current_user(request):
+        raise HTTPException(401, "Unauthorized")
     conn = db()
     cur = conn.execute(
         "UPDATE devices SET usb_enabled=? WHERE device_id=?",
@@ -292,7 +444,9 @@ def set_usb(device_id: str, command: USBCommand):
 
 
 @app.post("/api/devices/{device_id}/mtp")
-def set_mtp(device_id: str, command: MTPCommand):
+def set_mtp(request: Request, device_id: str, command: MTPCommand):
+    if not current_user(request):
+        raise HTTPException(401, "Unauthorized")
     conn = db()
     cur = conn.execute(
         "UPDATE devices SET mtp_enabled=? WHERE device_id=?",
@@ -306,7 +460,9 @@ def set_mtp(device_id: str, command: MTPCommand):
 
 
 @app.post("/api/devices/{device_id}/rename")
-def rename_device(device_id: str, command: RenameCommand):
+def rename_device(request: Request, device_id: str, command: RenameCommand):
+    if not current_user(request):
+        raise HTTPException(401, "Unauthorized")
     name = command.display_name.strip()
     if not name:
         raise HTTPException(400, "Nama tidak boleh kosong")

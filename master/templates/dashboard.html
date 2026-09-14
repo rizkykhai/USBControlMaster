@@ -16,6 +16,10 @@
     <button type="button" onclick="createKey()">+ Registration Key</button>
   </header>
 
+  <form method="post" action="/logout" id="logout-form">
+    <button type="submit" class="secondary logout-btn">Logout</button>
+  </form>
+
   <section class="keybox" id="keybox">Klik <b>+ Registration Key</b> untuk membuat key baru.</section>
 
   <section class="card">
@@ -67,9 +71,16 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// Jika sesi login sudah habis (30 menit), arahkan ke halaman login.
+function sessionEnded(res) {
+  if (res.status === 401) { window.location.href = '/login'; return true; }
+  return false;
+}
+
 async function createKey() {
   try {
     const res = await fetch('/api/enrollment-keys', {method:'POST', cache:'no-store'});
+    if (sessionEnded(res)) return;
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Gagal membuat key');
     document.getElementById('keybox').innerHTML = 'Registration Key baru: <code>' + escapeHtml(data.key) + '</code>';
@@ -81,6 +92,7 @@ async function createKey() {
 async function loadDevices() {
   try {
     const res = await fetch('/api/devices', {cache:'no-store'});
+    if (sessionEnded(res)) return;
     const devices = await res.json();
     if (!res.ok) throw new Error(devices.detail || 'Gagal mengambil device');
     const tbody = document.getElementById('devices');
@@ -117,6 +129,7 @@ async function setMTP(deviceId, enabled) {
     const res = await fetch('/api/devices/' + encodeURIComponent(deviceId) + '/mtp', {
       method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:!!enabled})
     });
+    if (sessionEnded(res)) return;
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Gagal mengubah policy MTP');
     await loadDevices();
@@ -132,6 +145,7 @@ async function renameDevice(deviceId, current) {
     const res = await fetch('/api/devices/' + encodeURIComponent(deviceId) + '/rename', {
       method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({display_name:trimmed})
     });
+    if (sessionEnded(res)) return;
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Gagal rename');
     await loadDevices();
@@ -143,6 +157,7 @@ async function setUSB(deviceId, enabled) {
     const res = await fetch('/api/devices/' + encodeURIComponent(deviceId) + '/usb', {
       method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:!!enabled})
     });
+    if (sessionEnded(res)) return;
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Gagal mengubah policy');
     await loadDevices();
